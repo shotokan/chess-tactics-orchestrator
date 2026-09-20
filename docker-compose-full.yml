@@ -1,0 +1,45 @@
+version: '3.8'
+
+# Complete stack for load testing
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: chess-tactics-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - chess-tactics-net
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: chess-tactics-phoenix
+    ports:
+      - "6006:6006"
+    environment:
+      - PHOENIX_PORT=6006
+      - PHOENIX_WORKING_DIR=/phoenix-data
+    volumes:
+      - phoenix-data:/phoenix-data
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - chess-tactics-net
+
+volumes:
+  redis-data:
+    driver: local
+  phoenix-data:
+    driver: local
+
+networks:
+  chess-tactics-net:
+    driver: bridge

@@ -40,6 +40,8 @@ class AgentState(TypedDict):
         refine_target: Which agent should be re-invoked for refinement
         refinement_count: Number of refinement cycles executed (hard limit to prevent loops)
         final_answer: Natural language answer to the user's question
+        hitl_approved: Whether human approved the results (for HITL pattern)
+        hitl_feedback: Optional feedback from human if not approved
     """
     user_request: str
     games_raw: list[dict]
@@ -50,3 +52,5 @@ class AgentState(TypedDict):
     refine_target: Optional[Literal["research", "analyst"]]
     refinement_count: int
     final_answer: Optional[str]
+    hitl_approved: bool
+    hitl_feedback: Optional[str]

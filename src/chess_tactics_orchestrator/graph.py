@@ -4,23 +4,29 @@ Main orchestration graph for the chess tactics analyzer.
 This module defines the LangGraph StateGraph that coordinates the multi-agent system.
 """
 
+from typing import Optional
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from chess_tactics_orchestrator.state import AgentState
 from chess_tactics_orchestrator.agents.research_agent import research_node
 from chess_tactics_orchestrator.agents.analyst_agent import analyst_node
 from chess_tactics_orchestrator.agents.supervisor import supervisor_node, supervisor_routing
+from chess_tactics_orchestrator.agents.hitl_node import hitl_approval_node
 
 
-def create_graph() -> CompiledStateGraph:
+def create_graph(checkpointer: Optional[BaseCheckpointSaver] = None) -> CompiledStateGraph:
     """
     Create and compile the orchestration graph.
 
     Graph structure:
-        START → supervisor → {research, analyst, END}
-                    ↑            ↓         ↓
-                    └────────────┴─────────┘
+        START → supervisor → {research, analyst, hitl_approval, END}
+                    ↑            ↓         ↓         ↓
+                    └────────────┴─────────┴─────────┘
                       (results loop back)
+
+    Args:
+        checkpointer: Optional checkpoint saver for persistence (e.g., RedisSaver)
 
     Returns:
         Compiled StateGraph ready for invocation
@@ -32,6 +38,7 @@ def create_graph() -> CompiledStateGraph:
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("research", research_node)
     workflow.add_node("analyst", analyst_node)
+    workflow.add_node("hitl_approval", hitl_approval_node)
 
     # Set entry point
     workflow.set_entry_point("supervisor")
@@ -39,20 +46,25 @@ def create_graph() -> CompiledStateGraph:
     # Add conditional edges from supervisor
     workflow.add_conditional_edges(
         "supervisor",
-        supervisor_routing,  # Function that returns Literal["research", "analyst", "end"]
+        supervisor_routing,  # Function that returns Literal["research", "analyst", "hitl_approval", "end"]
         {
             "research": "research",
             "analyst": "analyst",
+            "hitl_approval": "hitl_approval",
             "end": END
         }
     )
 
-    # Both specialists loop back to supervisor for validation/routing
+    # All nodes loop back to supervisor for validation/routing
     workflow.add_edge("research", "supervisor")
     workflow.add_edge("analyst", "supervisor")
+    workflow.add_edge("hitl_approval", "supervisor")
 
-    # Compile the graph
-    return workflow.compile()
+    # Compile with optional checkpointer and interrupt before HITL
+    return workflow.compile(
+        checkpointer=checkpointer,
+        interrupt_before=["hitl_approval"]  # Graph pauses before this node
+    )
 
 
 def run_query(user_request: str, username: str) -> dict:
