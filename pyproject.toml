@@ -1,0 +1,29 @@
+[project]
+name = "chess-tactics-orchestrator"
+version = "0.1.0"
+description = "Multi-agent hierarchical system for analyzing chess games from Lichess with LLM-powered natural language interface"
+authors = [
+    { name = "isabido-canelamedia", email = "ivan.sabido@canelamedia.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31.0",
+    "python-chess>=1.999",
+    "langgraph>=0.2.0",
+    "langchain>=0.1.0",
+    "langchain-google-genai>=1.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+chess-tactics = "chess_tactics_orchestrator.main:cli"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
