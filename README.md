@@ -1,330 +1,388 @@
 # Chess Tactics Orchestrator
 
-Multi-agent hierarchical system for analyzing chess games from Lichess with an LLM-powered natural language interface.
+Sistema multi-agente asíncrono para análisis de partidas de ajedrez con Lichess + LLM.
 
-Ask questions like _"How did I do with the Sicilian in the last 3 months?"_ and get comprehensive analysis combining:
-- Real game data from Lichess API
-- Quantitative metrics (winrate, blunders, endgame performance)
-- Natural language interpretation via Gemini
-- Supervised validation to ensure quality
+Pregunta en lenguaje natural _"¿Cómo me va con la Siciliana con negras?"_ y obtén análisis completo:
+- Datos reales de Lichess API
+- Métricas (winrate, blunders, finales)
+- Interpretación con Gemini LLM
+- Validación supervisada con HITL (Human-in-the-Loop)
 
-## Architecture
+---
 
-### System Diagram
+## 🚀 Quick Start
 
-![Graph Diagram](assets/graph.png)
+### 1. Pre-requisitos
+
+**Instalar:**
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [uv](https://docs.astral.sh/uv/) (package manager Python)
+- [Stockfish](https://stockfishchess.org/download/) chess engine
+
+**Mac (Homebrew):**
+```bash
+brew install uv stockfish
+```
+
+**Linux:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+sudo apt install stockfish
+```
+
+### 2. Clonar Repositorio
+
+```bash
+git clone https://github.com/TU_USUARIO/chess-tactics-orchestrator.git
+cd chess-tactics-orchestrator
+```
+
+### 3. Instalar Dependencias
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+uv sync
+```
+
+### 4. Configurar Credenciales
+
+**Crear archivo `.env`:**
+```bash
+cp .env.example .env
+```
+
+**Editar `.env` y completar:**
+```bash
+# REQUIRED: Obtener en https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=tu_clave_aqui
+
+# OPTIONAL: Obtener en https://lichess.org/account/oauth/token
+LICHESS_API_TOKEN=tu_token_aqui
+
+# REQUIRED: Path a Stockfish
+# Mac: /opt/homebrew/bin/stockfish
+# Linux: /usr/bin/stockfish
+STOCKFISH_PATH=/opt/homebrew/bin/stockfish
+```
+
+**Crear scripts de ejecución:**
+```bash
+# Copiar templates
+cp run_api.sh.example run_api.sh
+cp run_worker.sh.example run_worker.sh
+
+# Editar y completar credenciales
+nano run_api.sh     # Pegar GEMINI_API_KEY, LICHESS_API_TOKEN, STOCKFISH_PATH
+nano run_worker.sh  # Pegar las mismas variables
+
+# Dar permisos de ejecución
+chmod +x run_api.sh run_worker.sh
+```
+
+### 5. Iniciar Sistema
+
+**Terminal 1 - Services (Redis + Phoenix):**
+```bash
+docker-compose up -d
+```
+
+Verifica:
+```bash
+docker ps
+# Debe mostrar:
+# - chess-tactics-redis (puerto 6379)
+# - chess-tactics-phoenix (puerto 6006)
+```
+
+**Terminal 2 - API:**
+```bash
+./run_api.sh
+```
+
+Espera ver:
+```
+✓ Connected to Redis
+INFO:     Uvicorn running on http://0.0.0.0:8000
+```
+
+**Terminal 3 - Worker:**
+```bash
+./run_worker.sh
+```
+
+Espera ver:
+```
+🚀 Starting job worker...
+  Polling queue: job_queue
+```
+
+### 6. Crear Job
+
+**Terminal 4:**
+```bash
+curl -X POST http://localhost:8000/api/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_request": "¿cómo me va con la siciliana con negras?",
+    "metadata": {"username": "isabido86"}
+  }'
+```
+
+**Copiar `job_id` del response:**
+```json
+{
+  "job_id": "abc123-uuid-here",
+  "status": "queued",
+  ...
+}
+```
+
+### 7. Ver Progreso
+
+**Poll status cada 5s:**
+```bash
+JOB_ID="abc123-uuid-here"  # Reemplazar con tu job_id
+
+watch -n 5 "curl -s http://localhost:8000/api/jobs/$JOB_ID | jq '.status'"
+```
+
+**Estados:**
+1. `queued` → En cola
+2. `processing` → Worker ejecutando
+3. `waiting_approval` → **Pausado en HITL** (ver análisis parcial)
+4. `completed` → Finalizado
+
+### 8. Aprobar HITL
+
+Cuando `status == "waiting_approval"`, ver resultado parcial:
+```bash
+curl -s http://localhost:8000/api/jobs/$JOB_ID | jq '.result'
+```
+
+**Aprobar para continuar:**
+```bash
+curl -X POST http://localhost:8000/api/jobs/$JOB_ID/approve \
+  -H "Content-Type: application/json" \
+  -d '{"approved": true}'
+```
+
+O **rechazar para refinamiento:**
+```bash
+curl -X POST http://localhost:8000/api/jobs/$JOB_ID/approve \
+  -H "Content-Type: application/json" \
+  -d '{"approved": false, "feedback": "Need 20+ games"}'
+```
+
+### 9. Ver Resultado Final
+
+Poll hasta `status == "completed"`, luego:
+```bash
+curl -s http://localhost:8000/api/jobs/$JOB_ID | jq '.result.final_answer'
+```
+
+---
+
+## 📊 Observabilidad (Phoenix)
+
+**Abrir dashboard:**
+```bash
+open http://localhost:6006
+```
+
+**Ver traces:**
+1. Click "Traces" (sidebar)
+2. Filtrar proyecto: `chess-tactics-orchestrator`
+3. Inspeccionar spans:
+   - `worker_process_job` (latencia total)
+   - `research_agent` (Lichess API)
+   - `analyst_agent → compute_metrics` (Stockfish)
+   - `analyst_agent → interpret_metrics` (LLM tokens)
+
+**Capturar screenshot para entregable:**
+- Click en un trace
+- Screenshot mostrando spans + tiempos
+
+---
+
+## 🧪 Load Testing
+
+```bash
+python load_test.py
+```
+
+Ejecuta 5 jobs concurrentes, mide latencias, genera `load_test_results.json`.
+
+---
+
+## 🏗️ Arquitectura
+
+### Componentes
+
+```
+Client → FastAPI → Redis Queue → Worker → LangGraph
+                      ↓             ↓
+                  Checkpoints    Phoenix
+```
+
+- **FastAPI**: API REST asíncrona (puerto 8000)
+- **Worker**: Background processor (asyncio)
+- **Redis**: Job queue + LangGraph checkpoints
+- **Phoenix**: Observabilidad OpenTelemetry (puerto 6006)
+- **LangGraph**: Multi-agent orchestration
+- **Gemini**: LLM (gemini-3.5-flash)
+- **Stockfish**: Chess engine local
+
+### Grafo de Agentes
 
 ```
                  ┌─────────────┐
       ┌─────────▶│  Supervisor │◀─────────┐
       │          └──────┬──────┘          │
       │                 │ routing         │
-      │                 │ (Literal)       │
       │      ┌──────────┼──────────┐      │
       │      ▼          ▼          ▼      │
-      │ Investigación  Análisis    END     │
-      │  (research)    (analyst)           │
-      │      │          │                  │
-      └──────┴──────────┴──────────────────┘
-        (results loop back for validation)
+      │ Research    Analyst    HITL       │
+      │      │          │          │       │
+      └──────┴──────────┴──────────┘       │
+        (loop back for refinement)         │
+                                           ▼
+                                          END
 ```
 
-### Agent Topology Justification
+**Justificación topología:**
+- **Routing dinámico**: Supervisor decide qué agente invocar según estado
+- **Validación**: Supervisor aplica rúbrica antes de END
+- **Refinamiento**: Loop back si análisis insuficiente
+- **HITL**: Pausa para aprobación humana antes de entregar
 
-This **hierarchical supervisor architecture** was chosen over alternatives (sequential pipeline, peer-to-peer) for these reasons:
+### Flujo HITL
 
-1. **Dynamic routing** — The supervisor can skip agents or loop back based on intermediate results. If games are already sufficient, research isn't re-invoked. If analysis has gaps, the supervisor targets the specific agent to refine.
-
-2. **Validation gate** — The supervisor acts as a quality checkpoint before returning results to the user, applying explicit rubrics (§ Validation Rubric) instead of blindly trusting specialist outputs.
-
-3. **Conflict resolution** — When agents report incompatible states (e.g., analyst says "not enough data" but research says "done"), the supervisor arbitrates by checking hard constraints (game count, refinement limit) and deciding who to re-invoke.
-
-4. **Loop cutoff** — The supervisor enforces a hard limit (`refinement_count <= 2`) to prevent infinite cycles if research and analyst keep passing blame.
-
-Alternative topologies considered:
-
-- **Sequential pipeline** (research → analyst → end): No way to refine or loop back if initial results are poor.
-- **Peer-to-peer** (agents message each other directly): Risk of desynchronization, no central authority to enforce constraints.
-- **Flat coordinator** (all agents report to shared state, no supervisor): Would need to duplicate validation logic in every agent.
-
-## Metrics Computed
-
-The Analyst Agent computes **5 metrics** from the fetched games:
-
-| # | Metric | Source | Cost |
-|---|--------|--------|------|
-| 1 | **Winrate by opening** | Lichess API metadata | None |
-| 2 | **Winrate by color** (white/black) | Lichess API metadata | None |
-| 3 | **Game termination types** (time/mate/resign) | Lichess API metadata | None |
-| 4 | **Winrate by endgame type** (pawn/rook/minor piece/queen/mixed) | Material classification with `python-chess` | Low (no engine) |
-| 5 | **Tactical patterns missed** (hanging piece, fork, missed mate) | Stockfish + geometric heuristics on real games | High (position eval) |
-
-### Why Tactical Patterns Come from Real Games, Not Puzzle Dashboard
-
-Lichess has a puzzle dashboard (`GET /api/puzzle/dashboard/{days}`) with performance by theme (fork, pin, etc.), but it only reflects **puzzle-solving** performance, not **real-game mistakes**.
-
-To answer "where do I blunder in my actual games?", we analyze games directly:
-
-1. **Detect blunders**: Compare eval before/after each move, flag drops > 150 centipawns.
-2. **Classify patterns** using geometric heuristics with `python-chess`:
-   - **Hanging piece**: Captured piece had more attackers than defenders.
-   - **Fork**: Best move attacks 2+ valuable pieces simultaneously.
-   - **Missed mate**: Stockfish shows mate in N, player didn't play it.
-
-Subtle patterns (pins, discovered attacks, positional errors) are out of scope and declared as limitations (§ Known Limitations).
-
-The puzzle dashboard can be integrated as **optional enrichment** (if user has puzzle history, add it to `analysis_metadata`), but never as the primary source.
-
-## Conflict Handling Between Agents
-
-Conflicts between agents are resolved via the **Supervisor's validation rubric** and **hard deterministic checks**:
-
-### 1. Resource Dependencies
-
-**Conflict**: Analyst tries to run before Research has fetched games.
-
-**Resolution**: Supervisor checks `games_raw` before routing. If empty, always routes to `research` first (deterministic rule in `supervisor.py:route`).
-
-### 2. Contradictory Signals
-
-**Conflict**: Analyst reports `answers_user_question: False` or non-empty `gaps`, but Research claims "done".
-
-**Resolution**: Supervisor validates results against rubric:
-- **Completeness**: `games_analyzed >= 10`?
-- **Gaps**: Did analyst report limitations?
-- **Relevance**: Do games match user filters?
-
-If validation fails, `needs_refinement` is set to `True` and `refine_target` specifies which agent to re-invoke.
-
-### 3. Infinite Loops
-
-**Conflict**: Research and Analyst keep flagging each other for refinement in a cycle.
-
-**Resolution**: `refinement_count` hard limit (max 2 cycles). When hit, Supervisor forces `route → "end"` and the `final_answer` must explicitly state limitations:
-
-```python
-if state["refinement_count"] >= MAX_REFINEMENT_CYCLES:
-    return "end"  # Hard cutoff, return partial results
+```
+1. POST /jobs → queued
+2. Worker: research → analyst → supervisor
+3. Supervisor detecta: analysis sin aprobar
+4. Graph: interrupt_before=["hitl_approval"]
+5. Checkpoint saved → status=waiting_approval
+6. Client poll → ve resultado parcial
+7. Client POST /approve con approved=true/false
+8. Worker resume desde checkpoint
+9. status=completed → final_answer
 ```
 
-### 4. Source of Truth
+---
 
-**Conflict**: Agents read each other's raw outputs in inconsistent formats.
+## 📁 Estructura
 
-**Resolution**: All communication goes through `AgentState` (typed schema in `state.py`). No side channels, no global variables. Each agent writes to specific fields:
-- Research → `games_raw`
-- Analyst → `analysis_result`
-- Supervisor → `needs_refinement`, `refine_target`
+```
+src/chess_tactics_orchestrator/
+├── api/
+│   ├── app.py              # FastAPI app
+│   └── routes/
+│       ├── health.py       # GET /health
+│       └── jobs.py         # CRUD + approval
+├── agents/
+│   ├── research_agent.py   # Lichess API
+│   ├── analyst_agent.py    # Metrics + LLM
+│   ├── supervisor.py       # Routing + validation
+│   └── hitl_node.py        # HITL checkpoint
+├── infrastructure/
+│   ├── redis_client.py     # Async Redis
+│   └── checkpoint.py       # RedisSaver
+├── observability/
+│   └── phoenix_tracer.py   # OpenTelemetry
+├── models/
+│   └── job.py              # Pydantic schemas
+├── tools/
+│   ├── lichess_client.py
+│   ├── stockfish_eval.py
+│   └── tactic_detector.py
+├── graph.py                # LangGraph
+├── state.py                # AgentState
+└── worker.py               # Background processor
+```
 
-The `contributions` field uses `Annotated[list[Contribution], operator.add]` so each agent appends without overwriting others' logs.
+---
 
-## Installation
+## 🔧 Troubleshooting
 
-### Prerequisites
-
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv) package manager
-- Stockfish (optional, for fallback evaluation)
-
-### Setup
-
-1. Clone the repository:
+### Worker no procesa jobs
 
 ```bash
-git clone <repo-url>
-cd chess-tactics-orchestrator
+# Verificar Redis
+redis-cli LLEN job_queue
+
+# Verificar worker corriendo
+ps aux | grep worker
 ```
 
-2. Install dependencies:
+### API no responde
 
 ```bash
-uv sync
+# Verificar puerto libre
+lsof -i :8000
+
+# Reiniciar
+./run_api.sh
 ```
 
-3. Create `.env` file:
+### Phoenix sin traces
 
 ```bash
-cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
+# Verificar PHOENIX_ENABLED=true en run_worker.sh
+grep PHOENIX_ENABLED run_worker.sh
+
+# Reiniciar worker
 ```
 
-4. (Optional) Install Stockfish:
+---
 
-```bash
-# macOS
-brew install stockfish
+## 📖 Documentación Completa
 
-# Ubuntu/Debian
-sudo apt-get install stockfish
+- [README_API.md](README_API.md) - Endpoints, modelos, ejemplos
+- [TESTING.md](TESTING.md) - Guía paso a paso con outputs esperados
+- [CLAUDE.md](CLAUDE.md) - Contexto del proyecto (rúbrica)
 
-# Or download from https://stockfishchess.org/download/
-```
+---
 
-## Usage
+## 🔒 Seguridad
 
-### Command Line
+**IMPORTANTE:**
+- ❌ **NO** subir `run_api.sh` ni `run_worker.sh` a GitHub (contienen credentials)
+- ❌ **NO** commitear `.env` (ya está en .gitignore)
+- ✅ Solo subir `.env.example` y `run_*.sh.example`
 
-```bash
-uv run chess-tactics <username> <question>
-```
+**Al clonar repo:**
+1. `cp .env.example .env`
+2. `cp run_api.sh.example run_api.sh`
+3. Editar y completar credenciales
+4. Los archivos reales quedan locales (ignorados por git)
 
-**Examples:**
+---
 
-```bash
-# Basic query
-uv run chess-tactics DrNykterstein "How did I do with the Sicilian?"
+## 📦 Dependencias Principales
 
-# Time range
-uv run chess-tactics DrNykterstein "My blitz performance in the last 3 months"
+- `langgraph>=0.2.0` - Multi-agent orchestration
+- `langchain-google-genai>=1.0.0` - Gemini LLM
+- `fastapi>=0.109.0` - API async
+- `redis[hiredis]>=5.0.0` - Queue + checkpoints
+- `python-chess>=1.999` - Chess logic
+- `arize-phoenix>=5.0.0` - Observability
 
-# Detailed trace
-uv run chess-tactics -v DrNykterstein "Where do I lose with the King's Indian?"
-```
+Ver [pyproject.toml](pyproject.toml) para lista completa.
 
-### Programmatic Usage
+---
 
-```python
-from chess_tactics_orchestrator.graph import run_query
+## 📝 Limitaciones Conocidas
 
-result = run_query(
-    user_request="How did I do with the Sicilian in the last 3 months?",
-    username="DrNykterstein"
-)
+1. **Single worker**: No horizontal scaling
+2. **Sin autenticación**: API pública
+3. **Polling**: Cliente debe poll status (no webhooks)
+4. **Detección táctica limitada**: Solo pieza colgada, fork, mate perdido
 
-print(result["final_answer"])
-```
+Ver [README_API.md](README_API.md#limitaciones-conocidas) para detalles.
 
-## Project Structure
+---
 
-```
-chess-tactics-orchestrator/
-├── CLAUDE.md                          # Project context for Gemini Code
-├── README.md                          # This file
-├── pyproject.toml                     # uv project config
-├── .env.example                       # Environment template
-├── generate_diagram.py                # Script to regenerate graph.png
-├── assets/
-│   └── graph.png                      # Graph diagram (auto-generated)
-├── chess_tactics_orchestrator/        # Main package
-│   ├── __init__.py
-│   ├── state.py                       # AgentState schema with reducer
-│   ├── graph.py                       # StateGraph definition
-│   ├── main.py                        # CLI entry point
-│   ├── agents/
-│   │   ├── __init__.py
-│   │   ├── research_agent.py          # Fetches games from Lichess
-│   │   ├── analyst_agent.py           # Computes 5 metrics + LLM interpretation
-│   │   └── supervisor.py              # Routing + validation
-│   └── tools/
-│       ├── __init__.py
-│       ├── lichess_client.py          # Lichess API wrapper
-│       ├── stockfish_eval.py          # Position evaluation (Lichess → Stockfish fallback)
-│       └── tactic_detector.py         # Blunder classification + endgame typing
-└── tests/                             # Unit tests
-    ├── test_state.py
-    ├── test_research_agent.py
-    ├── test_analyst_agent.py
-    └── test_supervisor.py
-```
-
-## Validation Rubric
-
-The Supervisor applies this rubric before allowing `END`:
-
-### Deterministic Checks (no LLM)
-
-1. **Minimum games**: `len(games_raw) >= 10`
-2. **Analysis exists**: `analysis_result is not None`
-3. **No gaps**: `analysis_result["gaps"]` is empty
-
-### LLM-Based Validation (if deterministic checks pass)
-
-Supervisor sends structured prompt:
-
-```
-Evaluate against:
-1. Completeness: >= 10 games?
-2. Relevance: Games match user filters?
-3. Depth: Analysis beyond simple aggregates?
-4. Gaps: Agent reported limitations?
-
-Respond:
-COMPLETE: yes/no
-REASON: <one sentence>
-REFINE_TARGET: research/analyst/none
-INSTRUCTIONS: <specific improvements>
-```
-
-If `COMPLETE: no`, the supervisor sets `needs_refinement=True` and routes to `refine_target`.
-
-## Known Limitations
-
-### Tactical Pattern Detection
-
-The heuristic-based detector is limited to **3 reliably detectable patterns**:
-
-- ✅ **Hanging pieces** (undefended captures)
-- ✅ **Forks** (2+ valuable pieces attacked)
-- ✅ **Missed mates** (Stockfish says mate in N, player didn't play it)
-
-**Out of scope** (would require ML or complex board understanding):
-- ❌ Pins
-- ❌ Skewers
-- ❌ Discovered attacks
-- ❌ Deflection/decoy tactics
-- ❌ Positional/strategic errors
-
-Unclassified blunders are tagged as `"unclassified"` in the output.
-
-### Performance
-
-- **Move analysis** is limited to 20 games and samples every 3rd move by default to keep runtime reasonable (< 1 minute on typical queries).
-- For deep analysis, users can modify `sample_moves=False` in `analyst_agent.py:compute_metrics`.
-
-### Stockfish Dependency
-
-If Stockfish is not installed and games lack Lichess server analysis, evaluation falls back to errors. The system reports eval source counts in `analysis_metadata`:
-
-```json
-{
-  "eval_sources": {
-    "lichess": 28,
-    "stockfish": 12
-  }
-}
-```
-
-## Development
-
-### Running Tests
-
-```bash
-uv run pytest
-```
-
-### Regenerating Graph Diagram
-
-```bash
-uv run python generate_diagram.py
-```
-
-### Adding a New Metric
-
-1. Implement computation in `analyst_agent.py:compute_metrics`
-2. Add to interpretation prompt in `analyst_agent.py:interpret_metrics`
-3. Update this README's metrics table
-
-### Adding a New Agent
-
-1. Create `chess_tactics_orchestrator/agents/new_agent.py`
-2. Define a node function: `def new_agent_node(state: AgentState) -> dict`
-3. Register in `graph.py`: `workflow.add_node("new_agent", new_agent_node)`
-4. Update supervisor routing logic in `supervisor.py:route`
-
-## License
+## 📄 Licencia
 
 MIT
-
-## Contributing
-
-See [CLAUDE.md](CLAUDE.md) for project context and architecture decisions.

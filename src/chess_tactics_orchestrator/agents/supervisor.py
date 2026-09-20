@@ -23,12 +23,12 @@ class SupervisorAgent:
     MAX_REFINEMENT_CYCLES = 2
     MIN_GAMES_REQUIRED = 10
 
-    def __init__(self, model_name: str = "gemini-3.5-flash"):
+    def __init__(self, model_name: str = "gemini-3.6-flash"):
         """
         Initialize the supervisor.
 
         Args:
-            model_name: Gemini model to use (default: Gemini 2.5 Flash)
+            model_name: Gemini model to use (default: Gemini 3.6 Flash)
         """
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
@@ -76,7 +76,9 @@ REFINE_TARGET: research/analyst/none
 INSTRUCTIONS: <what needs improvement>
 """
 
-    def route(self, state: AgentState) -> Literal["research", "analyst", "end"]:
+    def route(
+        self, state: AgentState
+    ) -> Literal["research", "analyst", "hitl_approval", "end"]:
         """
         Determine which node to invoke next.
 
@@ -84,8 +86,14 @@ INSTRUCTIONS: <what needs improvement>
             state: Current agent state
 
         Returns:
-            Next node to invoke
+            Next node to invoke (including "hitl_approval" for HITL)
         """
+        # HITL checkpoint: if analyst has result but not yet approved, go to HITL node
+        analysis_result = state.get("analysis_result")
+        if analysis_result is not None and not state.get("hitl_approved", False):
+            # Route to HITL approval node (graph will interrupt before executing it)
+            return "hitl_approval"
+
         # Hard deterministic checks first (no LLM needed)
 
         # Check refinement limit
@@ -101,12 +109,11 @@ INSTRUCTIONS: <what needs improvement>
             return "research"
 
         # Check if we have analysis
-        if state.get("analysis_result") is None:
+        if analysis_result is None:
             return "analyst"
 
-        # Check if analysis answers the question
-        analysis_result = state.get("analysis_result", {})
-        if analysis_result.get("answers_user_question"):
+        # Check if analysis answers the question and has been approved
+        if analysis_result.get("answers_user_question") and state.get("hitl_approved"):
             return "end"
 
         # Fallback to LLM-based routing if deterministic rules don't apply
@@ -132,7 +139,7 @@ INSTRUCTIONS: <what needs improvement>
             # Default to end if LLM gives invalid response
             return "end"
 
-        return cast(Literal["research", "analyst", "end"], decision)
+        return cast(Literal["research", "analyst", "hitl_approval", "end"], decision)
 
     def validate(self, state: AgentState) -> dict:
         """
@@ -280,7 +287,9 @@ def supervisor_node(state: AgentState) -> dict:
     return {"needs_refinement": False, "refine_target": None}
 
 
-def supervisor_routing(state: AgentState) -> Literal["research", "analyst", "end"]:
+def supervisor_routing(
+    state: AgentState,
+) -> Literal["research", "analyst", "hitl_approval", "end"]:
     """
     Supervisor routing function for conditional edges.
 

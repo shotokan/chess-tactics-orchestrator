@@ -14,6 +14,7 @@ from langchain_core.tools import tool
 
 from chess_tactics_orchestrator.state import AgentState, Contribution
 from chess_tactics_orchestrator.tools.lichess_client import fetch_lichess_games
+from chess_tactics_orchestrator.observability import get_phoenix_tracer
 
 
 @tool
@@ -67,12 +68,12 @@ class ResearchAgent:
     Uses an LLM to interpret natural language queries and map them to API parameters.
     """
 
-    def __init__(self, model_name: str = "gemini-3.5-flash"):
+    def __init__(self, model_name: str = "gemini-3.6-flash"):
         """
         Initialize the research agent.
 
         Args:
-            model_name: Gemini model to use (default: Gemini 2.5 Flash)
+            model_name: Gemini model to use (default: Gemini 3.6 Flash)
         """
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
@@ -130,15 +131,21 @@ After fetching games, report:
         Returns:
             Updated state with games_raw populated and a contribution logged
         """
-        user_request = state["user_request"]
+        phoenix = get_phoenix_tracer()
 
-        messages = [
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=f"User request: {user_request}"),
-        ]
+        with phoenix.span(
+            "research_agent",
+            {"agent": "research", "user_request": state["user_request"]},
+        ):
+            user_request = state["user_request"]
 
-        # Invoke LLM with tool binding
-        response = self.llm.invoke(messages)
+            messages = [
+                SystemMessage(content=self.system_prompt),
+                HumanMessage(content=f"User request: {user_request}"),
+            ]
+
+            # Invoke LLM with tool binding
+            response = self.llm.invoke(messages)
 
         # Check if LLM called the tool
         if not response.tool_calls:
@@ -196,24 +203,24 @@ After fetching games, report:
         else:
             summary = f"Fetched {count} games"
 
-        # Check if we have enough games
-        needs_refinement = False
-        if len(games) < 10:
-            summary += f" (WARNING: only {len(games)} games, ideally need 10+)"
-            needs_refinement = True
+            # Check if we have enough games
+            needs_refinement = False
+            if len(games) < 10:
+                summary += f" (WARNING: only {len(games)} games, ideally need 10+)"
+                needs_refinement = True
 
-        return {
-            "games_raw": games,
-            "contributions": [
-                Contribution(
-                    agent="research",
-                    summary=summary,
-                    timestamp=datetime.now().isoformat(),
-                )
-            ],
-            "needs_refinement": needs_refinement,
-            "refine_target": "research" if needs_refinement else None,
-        }
+            return {
+                "games_raw": games,
+                "contributions": [
+                    Contribution(
+                        agent="research",
+                        summary=summary,
+                        timestamp=datetime.now().isoformat(),
+                    )
+                ],
+                "needs_refinement": needs_refinement,
+                "refine_target": "research" if needs_refinement else None,
+            }
 
 
 # Node function for LangGraph integration

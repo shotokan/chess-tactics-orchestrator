@@ -25,6 +25,7 @@ from chess_tactics_orchestrator.tools.tactic_detector import (
     analyze_tactics_in_game,
     EndgameClassifier,
 )
+from chess_tactics_orchestrator.observability import get_phoenix_tracer
 import chess
 
 
@@ -35,12 +36,12 @@ class AnalystAgent:
     Computes 5 metrics and provides LLM interpretation of the results.
     """
 
-    def __init__(self, model_name: str = "gemini-3.5-flash"):
+    def __init__(self, model_name: str = "gemini-3.6-flash"):
         """
         Initialize the analyst agent.
 
         Args:
-            model_name: Gemini model to use (default: Gemini 2.5 Flash)
+            model_name: Gemini model to use (default: Gemini 3.6 Flash)
         """
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
@@ -344,8 +345,14 @@ Evaluation sources:
         Returns:
             Updated state with analysis_result and final_answer
         """
-        games = state["games_raw"]
-        user_request = state["user_request"]
+        phoenix = get_phoenix_tracer()
+
+        with phoenix.span(
+            "analyst_agent",
+            {"agent": "analyst", "games_count": len(state["games_raw"])},
+        ):
+            games = state["games_raw"]
+            user_request = state["user_request"]
 
         # Extract username: check both colors in first and last game to find the common player
         username = "unknown"
@@ -395,44 +402,48 @@ Evaluation sources:
                 # Single game: guess based on order (white first, then black)
                 username = white_name or black_name or "unknown"
 
-        # Compute metrics
-        metrics = self.compute_metrics(games, username, sample_moves=True)
+            # Compute metrics
+            with phoenix.span(
+                "compute_metrics", {"username": username, "games_count": len(games)}
+            ):
+                metrics = self.compute_metrics(games, username, sample_moves=True)
 
-        # Check for gaps
-        gaps = []
-        answers_question = True
+            # Check for gaps
+            gaps = []
+            answers_question = True
 
-        if metrics.get("games_analyzed", 0) < 10:
-            gaps.append(
-                f"Only {metrics.get('games_analyzed', 0)} games analyzed (ideal: 10+)"
-            )
-            answers_question = False
-
-        if metrics.get("error"):
-            gaps.append(metrics["error"])
-            answers_question = False
-
-        # Interpret with LLM
-        interpretation = self.interpret_metrics(metrics, user_request)
-
-        return {
-            "analysis_result": {
-                "metrics": metrics,
-                "interpretation": interpretation,
-                "answers_user_question": answers_question,
-                "gaps": gaps,
-            },
-            "analysis_metadata": metrics.get("eval_sources", {}),
-            "contributions": [
-                Contribution(
-                    agent="analyst",
-                    summary=f"Analyzed {metrics.get('games_analyzed', 0)} games, computed 5 metrics",
-                    timestamp=datetime.now().isoformat(),
+            if metrics.get("games_analyzed", 0) < 10:
+                gaps.append(
+                    f"Only {metrics.get('games_analyzed', 0)} games analyzed (ideal: 10+)"
                 )
-            ],
-            "final_answer": interpretation if answers_question else None,
-            "needs_refinement": not answers_question,
-        }
+                answers_question = False
+
+            if metrics.get("error"):
+                gaps.append(metrics["error"])
+                answers_question = False
+
+            # Interpret with LLM
+            with phoenix.span("interpret_metrics"):
+                interpretation = self.interpret_metrics(metrics, user_request)
+
+            return {
+                "analysis_result": {
+                    "metrics": metrics,
+                    "interpretation": interpretation,
+                    "answers_user_question": answers_question,
+                    "gaps": gaps,
+                },
+                "analysis_metadata": metrics.get("eval_sources", {}),
+                "contributions": [
+                    Contribution(
+                        agent="analyst",
+                        summary=f"Analyzed {metrics.get('games_analyzed', 0)} games, computed 5 metrics",
+                        timestamp=datetime.now().isoformat(),
+                    )
+                ],
+                "final_answer": interpretation if answers_question else None,
+                "needs_refinement": not answers_question,
+            }
 
 
 # Node function for LangGraph integration

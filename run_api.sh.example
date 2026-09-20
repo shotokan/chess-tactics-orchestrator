@@ -1,0 +1,34 @@
+#!/bin/bash
+# Start FastAPI server with environment variables
+#
+# IMPORTANTE: Copiar este archivo como run_api.sh y completar las variables
+# cp run_api.sh.example run_api.sh
+
+export PATH="$HOME/.local/bin:$PATH"
+
+# REQUIRED: Tu API key de Google Gemini (obtener en https://aistudio.google.com/app/apikey)
+export GEMINI_API_KEY="YOUR_GEMINI_API_KEY_HERE"
+
+# OPTIONAL: Token de Lichess para rate limits más altos (crear en https://lichess.org/account/oauth/token)
+export LICHESS_API_TOKEN="YOUR_LICHESS_TOKEN_HERE"
+
+# REQUIRED: Path a Stockfish engine
+# Mac (Homebrew): /opt/homebrew/bin/stockfish
+# Linux: /usr/bin/stockfish
+# Windows: C:/Program Files/stockfish/stockfish.exe
+export STOCKFISH_PATH="/opt/homebrew/bin/stockfish"
+
+# Redis connection
+export REDIS_HOST=localhost
+export REDIS_PORT=6379
+
+# Phoenix observability
+export PHOENIX_ENABLED=true
+export PHOENIX_ENDPOINT=http://localhost:6006
+
+echo "Starting Chess Tactics Orchestrator API..."
+echo "Docs: http://localhost:8000/docs"
+echo "Health: http://localhost:8000/api/health"
+echo ""
+
+uv run uvicorn chess_tactics_orchestrator.api.app:app --reload --host 0.0.0.0 --port 8000
